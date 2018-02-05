@@ -1,0 +1,943 @@
+//
+// ********************************************************************
+// * License and Disclaimer                                           *
+// *                                                                  *
+// * The  Geant4 software  is  copyright of the Copyright Holders  of *
+// * the Geant4 Collaboration.  It is provided  under  the terms  and *
+// * conditions of the Geant4 Software License,  included in the file *
+// * LICENSE and available at  http://cern.ch/geant4/license .  These *
+// * include a list of copyright holders.                             *
+// *                                                                  *
+// * Neither the authors of this software system, nor their employing *
+// * institutes,nor the agencies providing financial support for this *
+// * work  make  any representation or  warranty, express or implied, *
+// * regarding  this  software system or assume any liability for its *
+// * use.  Please see the license in the file  LICENSE  and URL above *
+// * for the full disclaimer and the limitation of liability.         *
+// *                                                                  *
+// * This  code  implementation is the result of  the  scientific and *
+// * technical work of the GEANT4 collaboration.                      *
+// * By using,  copying,  modifying or  distributing the software (or *
+// * any work based  on the software)  you  agree  to acknowledge its *
+// * use  in  resulting  scientific  publications,  and indicate your *
+// * acceptance of all terms of the Geant4 Software license.          *
+// ********************************************************************
+//
+// $Id: B5DetectorConstruction.cc 77656 2013-11-27 08:52:57Z gcosmo $
+//
+/// \file B5DetectorConstruction.cc
+/// \brief Implementation of the B5DetectorConstruction class
+
+#include "B5DetectorConstruction.hh"
+#include "B5MagneticField.hh"
+#include "B5CellParameterisation.hh"
+#include "B5HodoscopeSD.hh"
+#include "B5DriftChamberSD.hh"
+#include "B5EmCalorimeterSD.hh"
+#include "B5HadCalorimeterSD.hh"
+
+#include "G4FieldManager.hh"
+#include "G4TransportationManager.hh"
+#include "G4Mag_UsualEqRhs.hh"
+#include "G4AutoDelete.hh"
+
+#include "G4Material.hh"
+#include "G4Element.hh"
+#include "G4MaterialTable.hh"
+#include "G4NistManager.hh"
+
+#include "G4VSolid.hh"
+#include "G4Box.hh"
+#include "G4Tubs.hh"
+#include "G4LogicalVolume.hh"
+#include "G4VPhysicalVolume.hh"
+#include "G4PVPlacement.hh"
+#include "G4PVParameterised.hh"
+#include "G4PVReplica.hh"
+#include "G4UserLimits.hh"
+
+#include "G4SDManager.hh"
+#include "G4VSensitiveDetector.hh"
+#include "G4RunManager.hh"
+#include "G4GenericMessenger.hh"
+
+#include "G4VisAttributes.hh"
+#include "G4Colour.hh"
+
+#include "G4ios.hh"
+#include "G4SystemOfUnits.hh"
+
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
+
+G4ThreadLocal B5MagneticField* B5DetectorConstruction::fMagneticField = 0;
+G4ThreadLocal G4FieldManager* B5DetectorConstruction::fFieldMgr = 0;
+    
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
+
+B5DetectorConstruction::B5DetectorConstruction()
+: G4VUserDetectorConstruction(), 
+  fMessenger(0),
+  fWirePlane1Logical(0), fWirePlane2Logical(0),
+  fCellLogical(0), fHadCalScintiLogical(0),
+  fMagneticLogical(0),
+  fVisAttributes(),
+  fArmAngle(0.*deg), fArmRotation(0), fSecondArmPhys(0)
+{
+    fArmRotation = new G4RotationMatrix();
+    fArmRotation->rotateY(fArmAngle);
+
+
+    // Default detector configurations
+    fN=5;
+    G4double top_face=5*cm;
+    fPositions.push_back(G4ThreeVector(0.0,0.0,top_face));
+    fPositions.push_back(G4ThreeVector(0.0,0.0,top_face+5*cm));
+    fPbZ=top_face+9.5*cm;
+
+
+     // fPositions.push_back(G4ThreeVector(0.0,0.0,top_face+26.2*cm));
+     // fPositions.push_back(G4ThreeVector(0.0,0.0,top_face+37.5*cm));
+     // fPositions.push_back(G4ThreeVector(0.0,0.0,top_face+51.5*cm));
+     // fPositions.push_back(G4ThreeVector(0.0,0.0,top_face+62.5*cm));
+     // fPositions.push_back(G4ThreeVector(0.0,0.0,top_face+70.7*cm));
+     // fPositions.push_back(G4ThreeVector(0.0,0.0,top_face+75.5*cm));
+     fPositions.push_back(G4ThreeVector(0.0,0.0,top_face+87.8*cm));
+    fsizex=88*cm;
+    fsizey=15*cm;
+    fsizez=4*cm;
+
+    fPbHeight=15*cm;
+
+    fEfficiency=100;
+
+    
+    // define commands for this class
+    DefineCommands();
+}
+
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
+
+// B5DetectorConstruction::~B5DetectorConstruction()
+// {
+//     delete fArmRotation;
+//     delete fMessenger;
+
+//     fPaddlesLogical.clear();
+//     fPaddlesPhysical.clear();
+    
+//     for (G4int i=0; i<G4int(fVisAttributes.size()); ++i) 
+//     {
+//       delete fVisAttributes[i];
+//     }  
+// }
+
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
+
+G4VPhysicalVolume* B5DetectorConstruction::Construct()
+{
+    // Construct materials
+    ConstructMaterials();
+    G4Material* air = G4Material::GetMaterial("G4_AIR");
+    //G4Material* argonGas = G4Material::GetMaterial("B5_Ar");
+    G4Material* argonGas = G4Material::GetMaterial("G4_Ar");
+    G4Material* scintillator = G4Material::GetMaterial("G4_PLASTIC_SC_VINYLTOLUENE");
+    G4Material* csI = G4Material::GetMaterial("G4_CESIUM_IODIDE");
+    G4Material* lead = G4Material::GetMaterial("G4_Pb");
+    
+    // Option to switch on/off checking of volumes overlaps
+    //
+    G4bool checkOverlaps = true;
+
+    // geometries --------------------------------------------------------------
+    // experimental hall (world volume)
+    G4VSolid* worldSolid 
+      = new G4Box("worldBox",1.*m,1.*m,10.*m);
+    G4LogicalVolume* worldLogical
+      = new G4LogicalVolume(worldSolid,air,"worldLogical");
+    G4VPhysicalVolume* worldPhysical
+      = new G4PVPlacement(0,G4ThreeVector(),worldLogical,"worldPhysical",0,
+                          false,0,checkOverlaps);
+    
+    // Tube with Local Magnetic field
+    
+    // G4VSolid* magneticSolid 
+    //   = new G4Tubs("magneticTubs",0.,1.*m,1.*m,0.,360.*deg);
+
+    // fMagneticLogical
+    //   = new G4LogicalVolume(magneticSolid, air, "magneticLogical");
+
+    // // placement of Tube
+    
+    // G4RotationMatrix* fieldRot = new G4RotationMatrix();
+    // fieldRot->rotateX(90.*deg);
+    // new G4PVPlacement(fieldRot,G4ThreeVector(),fMagneticLogical,
+    //                   "magneticPhysical",worldLogical,
+    //                   false,0,checkOverlaps);
+    
+    // // set step limit in tube with magnetic field  
+    // G4UserLimits* userLimits = new G4UserLimits(1*m);
+    // fMagneticLogical->SetUserLimits(userLimits);
+    
+    // // first arm
+    // G4VSolid* firstArmSolid 
+    //   = new G4Box("firstArmBox",1.5*m,1.*m,3.*m);
+    // G4LogicalVolume* firstArmLogical
+    //   = new G4LogicalVolume(firstArmSolid,air,"firstArmLogical");
+    // new G4PVPlacement(0,G4ThreeVector(0.,0.,-5.*m),firstArmLogical,
+    //                   "firstArmPhysical",worldLogical,
+    //                   false,0,checkOverlaps);
+    
+    // // second arm
+    // G4VSolid* secondArmSolid 
+    //   = new G4Box("secondArmBox",2.*m,2.*m,3.5*m);
+    // G4LogicalVolume* secondArmLogical
+    //   = new G4LogicalVolume(secondArmSolid,air,"secondArmLogical");
+    // G4double x = -5.*m * std::sin(fArmAngle);
+    // G4double z = 5.*m * std::cos(fArmAngle);
+    // fSecondArmPhys
+    //   = new G4PVPlacement(fArmRotation,G4ThreeVector(x,0.,z),secondArmLogical,
+    //                       "fSecondArmPhys",worldLogical,
+    //                       false,0,checkOverlaps);
+    
+
+    fPaddlesLogical.clear();
+    fPaddlesPhysical.clear();
+
+      char char_sdname[20];
+
+	//=====================================================================================
+ 	// Upper detector 
+	//=====================================================================================
+	// Logical name 	
+	sprintf(char_sdname,"paddle1");
+      	G4String logical_name(char_sdname);
+
+	G4VSolid* paddleSolid = new G4Box("paddle_top",fsizex*0.5,fsizey*0.5,fsizez*0.5);
+      	G4LogicalVolume* tmp = new G4LogicalVolume(paddleSolid,scintillator,logical_name);
+	fPaddlesLogical.push_back(tmp);
+      	      	
+	// Physical name 	
+	sprintf(char_sdname,"paddle_physical_top");
+      	G4String physical_name(char_sdname);
+      	G4VPhysicalVolume* tmpp = new G4PVPlacement(0,G4ThreeVector(0.0,0.0,0.0),fPaddlesLogical.back(),physical_name,worldLogical, false,1,checkOverlaps);
+      	fPaddlesPhysical.push_back(tmpp);
+	//=====================================================================================
+	
+
+	//=====================================================================================
+ 	// Middle detector 
+	//=====================================================================================
+	// Logical name 	
+	sprintf(char_sdname,"paddle2");
+      	G4String logical_name2(char_sdname);
+      	
+	paddleSolid = new G4Box("paddle_mid",fsizex*0.5,fsizey*0.5,fsizez*0.5);
+      	tmp = new G4LogicalVolume(paddleSolid,scintillator,logical_name2);
+	fPaddlesLogical.push_back(tmp);
+      	
+	// Physical name 	
+	sprintf(char_sdname,"paddle_physical_mid");
+      	G4String physical_name2(char_sdname);
+      	tmpp = new G4PVPlacement(0,G4ThreeVector(0.0,0.0,20.0*cm+4.0*cm),fPaddlesLogical.back(),physical_name2,worldLogical, false,2,checkOverlaps);
+      	fPaddlesPhysical.push_back(tmpp);
+	//=====================================================================================
+
+	//=====================================================================================
+ 	// Lower detector (underneath bricks)
+	//=====================================================================================
+	// Logical name 	
+	sprintf(char_sdname,"paddle3");
+      	G4String logical_name3(char_sdname);
+
+	paddleSolid = new G4Box("paddle_low",fsizex*0.5,fsizey*0.5,fsizez*0.5);
+      	tmp = new G4LogicalVolume(paddleSolid,scintillator,logical_name3);
+	fPaddlesLogical.push_back(tmp);
+      	
+      	
+	// Physical name 	
+	sprintf(char_sdname,"paddle_physical_low");
+      	G4String physical_name3(char_sdname);
+      	tmpp = new G4PVPlacement(0,G4ThreeVector(0.0,0.0,50.0*cm),fPaddlesLogical.back(),physical_name3,worldLogical, false,3,checkOverlaps);
+      	fPaddlesPhysical.push_back(tmpp);
+	//=====================================================================================
+	
+
+	//=====================================================================================
+ 	// Left detector
+	//=====================================================================================
+	// Logical name 	
+	sprintf(char_sdname,"paddle4");
+      	G4String logical_name4(char_sdname);
+
+	paddleSolid = new G4Box("paddle_left",fsizex*0.5,fsizez*0.5,fsizey*0.5);// swapped as on its side
+      	tmp = new G4LogicalVolume(paddleSolid,scintillator,logical_name4);
+	fPaddlesLogical.push_back(tmp);
+      	
+	// Physical name 	
+	sprintf(char_sdname,"paddle_physical_left");
+      	G4String physical_name4(char_sdname);
+      	tmpp = new G4PVPlacement(0,G4ThreeVector(0.0,12.0*cm,50.0*cm-12*cm),fPaddlesLogical.back(),physical_name4,worldLogical, false,4,checkOverlaps);
+      	fPaddlesPhysical.push_back(tmpp);
+	//=====================================================================================
+	
+	//=====================================================================================
+ 	// Right detector
+	//=====================================================================================
+      	
+	// Logical name 	
+	sprintf(char_sdname,"paddle5");
+      	G4String logical_name5(char_sdname);
+
+	paddleSolid = new G4Box("paddle_right",fsizex*0.5,fsizez*0.5,fsizey*0.5);// swapped as on its side
+      	tmp = new G4LogicalVolume(paddleSolid,scintillator,logical_name5);
+	fPaddlesLogical.push_back(tmp);
+      	
+	// Physical name 	
+	sprintf(char_sdname,"paddle_physical_right");
+      	G4String physical_name5(char_sdname);
+      	tmpp = new G4PVPlacement(0,G4ThreeVector(0.0,-12.0*cm,50.0*cm-12*cm),fPaddlesLogical.back(),physical_name5,worldLogical, false,5,checkOverlaps);
+      	fPaddlesPhysical.push_back(tmpp);
+	//=====================================================================================
+	
+
+/*
+    // hodoscopes in first arm
+    G4VSolid* paddleSolid = new G4Box("paddle_box",fsizex*0.5,fsizey*0.5,fsizez*0.5);
+    for(int i=0;i<(int) fN;i++){
+
+      char char_sdname[20];
+      sprintf(char_sdname,"/paddle%dLogical",i);
+      G4String logical_name(char_sdname);
+      sprintf(char_sdname,"/paddle%dPhysical",i);
+      G4String physical_name(char_sdname);
+
+      G4LogicalVolume* tmp = new G4LogicalVolume(paddleSolid,scintillator,logical_name);
+      fPaddlesLogical.push_back(tmp);
+      G4VPhysicalVolume* tmpp = new G4PVPlacement(0,fPositions.at(i),fPaddlesLogical.back(),physical_name,worldLogical, false,i,checkOverlaps);
+      fPaddlesPhysical.push_back(tmpp);
+    
+    }    
+*/
+
+    // Insert lead scattering bricks
+    G4VSolid* pbSolid = new G4Box("lead_box",fsizex*0.5,fsizey*0.5,0.5*fPbHeight);
+    fPbLogical = new G4LogicalVolume(pbSolid,lead,"pb_bricks_logical");
+   
+//    G4ThreeVector pb_centre(fPositions.back().x(),fPositions.back().y(),fPbZ);
+    G4ThreeVector pb_centre(0.0,0.0,38.0*cm);
+    fPbPhysical=new G4PVPlacement(0,pb_centre,fPbLogical,"pb_bricks_physical",worldLogical, false,fN+1,checkOverlaps);
+
+    // Set the Visualisation attributes
+    G4VisAttributes* visAttributes = new G4VisAttributes(G4Colour(1.0,1.0,1.0));
+    visAttributes->SetVisibility(false);
+    worldLogical->SetVisAttributes(visAttributes);
+    fVisAttributes.push_back(visAttributes);
+
+    visAttributes = new G4VisAttributes(G4Colour(0.8888,0.0,0.0));
+    for(int i=0;i<(int) fPaddlesLogical.size();i++){
+      (fPaddlesLogical.at(i))->SetVisAttributes(visAttributes);
+      fVisAttributes.push_back(visAttributes);
+    }
+
+    visAttributes = new G4VisAttributes(G4Colour(0.8888,0.0,1.0));
+    fPbLogical->SetVisAttributes(visAttributes);
+
+
+
+    // for (G4int i=0;i<15;i++)
+    // {
+    //     G4double x1 = (i-7)*10.*cm;
+    //     new G4PVPlacement(0,G4ThreeVector(x1,0.,-1.5*m),fHodoscope1Logical,
+    //                       "hodoscope1Physical",firstArmLogical,
+    //                       false,i,checkOverlaps);
+    // }
+    
+    // drift chambers in first arm
+    // G4VSolid* chamber1Solid 
+    //   = new G4Box("chamber1Box",1.*m,30.*cm,1.*cm);
+    // G4LogicalVolume* chamber1Logical
+    //   = new G4LogicalVolume(chamber1Solid,argonGas,"chamber1Logical");
+    // for (G4int i=0;i<5;i++)
+
+    // {
+    //     G4double z1 = (i-2)*0.5*m;
+    //     new G4PVPlacement(0,G4ThreeVector(0.,0.,z1),chamber1Logical,
+    //                       "chamber1Physical",firstArmLogical,
+    //                       false,i,checkOverlaps);
+    // }
+    
+    // // "virtual" wire plane
+    // G4VSolid* wirePlane1Solid 
+    //   = new G4Box("wirePlane1Box",1.*m,30.*cm,0.1*mm);
+    // fWirePlane1Logical
+    //   = new G4LogicalVolume(wirePlane1Solid,argonGas,"wirePlane1Logical");
+    // new G4PVPlacement(0,G4ThreeVector(0.,0.,0.),fWirePlane1Logical,
+    //                   "wirePlane1Physical",chamber1Logical,
+    //                   false,0,checkOverlaps);
+    
+    // hodoscopes in second arm
+    // G4VSolid* hodoscope2Solid 
+    //   = new G4Box("hodoscope2Box",5.*cm,20.*cm,0.5*cm);
+    // fHodoscope2Logical
+    //   = new G4LogicalVolume(hodoscope2Solid,scintillator,"hodoscope2Logical");
+    // for (G4int i=0;i<25;i++)
+    // {
+    //     G4double x2 = (i-12)*10.*cm;
+    //     new G4PVPlacement(0,G4ThreeVector(x2,0.,0.),fHodoscope2Logical,
+    //                       "hodoscope2Physical",secondArmLogical,
+    //                       false,i,checkOverlaps);
+    // }
+    
+    // // drift chambers in second arm
+    // G4VSolid* chamber2Solid 
+    //   = new G4Box("chamber2Box",1.5*m,30.*cm,1.*cm);
+    // G4LogicalVolume* chamber2Logical
+    //   = new G4LogicalVolume(chamber2Solid,argonGas,"chamber2Logical");
+    // for (G4int i=0;i<5;i++)
+    // {
+    //     G4double z2 = (i-2)*0.5*m - 1.5*m;
+    //     new G4PVPlacement(0,G4ThreeVector(0.,0.,z2),chamber2Logical,
+    //                       "chamber2Physical",secondArmLogical,
+    //                       false,i,checkOverlaps);
+    // }
+    
+    // // "virtual" wire plane
+    // G4VSolid* wirePlane2Solid 
+    //   = new G4Box("wirePlane2Box",1.5*m,30.*cm,0.1*mm);
+    // fWirePlane2Logical
+    //   = new G4LogicalVolume(wirePlane2Solid,argonGas,"wirePlane2Logical");
+    // new G4PVPlacement(0,G4ThreeVector(0.,0.,0.),fWirePlane2Logical,
+    //                   "wirePlane2Physical",chamber2Logical,
+    //                   false,0,checkOverlaps);
+    
+    // // CsI calorimeter
+    // G4VSolid* emCalorimeterSolid 
+    //   = new G4Box("EMcalorimeterBox",1.5*m,30.*cm,15.*cm);
+    // G4LogicalVolume* emCalorimeterLogical
+    //   = new G4LogicalVolume(emCalorimeterSolid,csI,"EMcalorimeterLogical");
+    // new G4PVPlacement(0,G4ThreeVector(0.,0.,2.*m),emCalorimeterLogical,
+    //                   "EMcalorimeterPhysical",secondArmLogical,
+    //                   false,0,checkOverlaps);
+    
+    // // EMcalorimeter cells
+    // G4VSolid* cellSolid 
+    //   = new G4Box("cellBox",7.5*cm,7.5*cm,15.*cm);
+    // fCellLogical
+    //   = new G4LogicalVolume(cellSolid,csI,"cellLogical");
+    // G4VPVParameterisation* cellParam = new B5CellParameterisation();
+    // new G4PVParameterised("cellPhysical",fCellLogical,emCalorimeterLogical,
+    //                       kXAxis,80,cellParam);
+    
+    // // hadron calorimeter
+    // G4VSolid* hadCalorimeterSolid
+    //   = new G4Box("HadCalorimeterBox",1.5*m,30.*cm,50.*cm);
+    // G4LogicalVolume* hadCalorimeterLogical
+    //   = new G4LogicalVolume(hadCalorimeterSolid,lead,"HadCalorimeterLogical");
+    // new G4PVPlacement(0,G4ThreeVector(0.,0.,3.*m),hadCalorimeterLogical,
+    //                   "HadCalorimeterPhysical",secondArmLogical,
+    //                   false,0,checkOverlaps);
+    
+    // // hadron calorimeter column
+    // G4VSolid* HadCalColumnSolid
+    //   = new G4Box("HadCalColumnBox",15.*cm,30.*cm,50.*cm);
+    // G4LogicalVolume* HadCalColumnLogical
+    //   = new G4LogicalVolume(HadCalColumnSolid,lead,"HadCalColumnLogical");
+    // new G4PVReplica("HadCalColumnPhysical",HadCalColumnLogical,
+    //                 hadCalorimeterLogical,kXAxis,10,30.*cm);
+    
+    // // hadron calorimeter cell
+    // G4VSolid* HadCalCellSolid
+    //   = new G4Box("HadCalCellBox",15.*cm,15.*cm,50.*cm);
+    // G4LogicalVolume* HadCalCellLogical
+    //   = new G4LogicalVolume(HadCalCellSolid,lead,"HadCalCellLogical");
+    // new G4PVReplica("HadCalCellPhysical",HadCalCellLogical,
+    //                 HadCalColumnLogical,kYAxis,2,30.*cm);
+    
+    // // hadron calorimeter layers
+    // G4VSolid* HadCalLayerSolid
+    //   = new G4Box("HadCalLayerBox",15.*cm,15.*cm,2.5*cm);
+    // G4LogicalVolume* HadCalLayerLogical
+    //   = new G4LogicalVolume(HadCalLayerSolid,lead,"HadCalLayerLogical");
+    // new G4PVReplica("HadCalLayerPhysical",HadCalLayerLogical,
+    //                 HadCalCellLogical,kZAxis,20,5.*cm);
+    
+    // // scintillator plates
+    // G4VSolid* HadCalScintiSolid
+    //   = new G4Box("HadCalScintiBox",15.*cm,15.*cm,0.5*cm);
+    // fHadCalScintiLogical
+    //   = new G4LogicalVolume(HadCalScintiSolid,scintillator,
+    //                         "HadCalScintiLogical");
+    // new G4PVPlacement(0,G4ThreeVector(0.,0.,2.*cm),fHadCalScintiLogical,
+    //                   "HadCalScintiPhysical",HadCalLayerLogical,
+    //                   false,0,checkOverlaps);
+    
+    // visualization attributes ------------------------------------------------
+    
+    // G4VisAttributes* visAttributes = new G4VisAttributes(G4Colour(1.0,1.0,1.0));
+    // visAttributes->SetVisibility(false);
+    // worldLogical->SetVisAttributes(visAttributes);
+    // fVisAttributes.push_back(visAttributes);
+    
+    // visAttributes = new G4VisAttributes(G4Colour(0.9,0.9,0.9));   // LightGray
+    // fMagneticLogical->SetVisAttributes(visAttributes);
+    // fVisAttributes.push_back(visAttributes);
+    
+    // visAttributes = new G4VisAttributes(G4Colour(1.0,1.0,1.0));
+    // visAttributes->SetVisibility(false);
+    // firstArmLogical->SetVisAttributes(visAttributes);
+    // secondArmLogical->SetVisAttributes(visAttributes);
+    // fVisAttributes.push_back(visAttributes);
+    
+    // visAttributes = new G4VisAttributes(G4Colour(0.8888,0.0,0.0));
+    // fHodoscope1Logical->SetVisAttributes(visAttributes);
+    // fHodoscope2Logical->SetVisAttributes(visAttributes);
+    // fHodoscope3Logical->SetVisAttributes(visAttributes);
+    // fVisAttributes.push_back(visAttributes);
+    
+    // visAttributes = new G4VisAttributes(G4Colour(0.0,1.0,0.0));
+    // chamber1Logical->SetVisAttributes(visAttributes);
+    // chamber2Logical->SetVisAttributes(visAttributes);
+    // fVisAttributes.push_back(visAttributes);
+    
+    // visAttributes = new G4VisAttributes(G4Colour(0.0,0.8888,0.0));
+    // visAttributes->SetVisibility(false);
+    // fWirePlane1Logical->SetVisAttributes(visAttributes);
+    // fWirePlane2Logical->SetVisAttributes(visAttributes);
+    // fVisAttributes.push_back(visAttributes);
+    
+    // visAttributes = new G4VisAttributes(G4Colour(0.8888,0.8888,0.0));
+    // visAttributes->SetVisibility(false);
+    // emCalorimeterLogical->SetVisAttributes(visAttributes);
+    // fVisAttributes.push_back(visAttributes);
+    
+    // visAttributes = new G4VisAttributes(G4Colour(0.9,0.9,0.0));
+    // fCellLogical->SetVisAttributes(visAttributes);
+    // fVisAttributes.push_back(visAttributes);
+    
+    // visAttributes = new G4VisAttributes(G4Colour(0.0, 0.0, 0.9));
+    // hadCalorimeterLogical->SetVisAttributes(visAttributes);
+    // fVisAttributes.push_back(visAttributes);
+    
+    // visAttributes = new G4VisAttributes(G4Colour(0.0, 0.0, 0.9));
+    // visAttributes->SetVisibility(false);
+    // HadCalColumnLogical->SetVisAttributes(visAttributes);
+    // HadCalCellLogical->SetVisAttributes(visAttributes);
+    // HadCalLayerLogical->SetVisAttributes(visAttributes);
+    // fHadCalScintiLogical->SetVisAttributes(visAttributes);
+    // fVisAttributes.push_back(visAttributes);
+    
+    // return the world physical volume ----------------------------------------
+    
+    return worldPhysical;
+}
+
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
+
+void B5DetectorConstruction::ConstructSDandField()
+{
+    // sensitive detectors -----------------------------------------------------
+    G4SDManager* SDman = G4SDManager::GetSDMpointer();
+    G4String SDname;
+    
+
+    for(int i=0;i<(int) fPaddlesLogical.size();i++){
+
+      char char_sdname[20];
+      sprintf(char_sdname,"/paddle%d",i);
+      G4String SDname(char_sdname);
+      G4cout << SDname << G4endl;
+      G4VSensitiveDetector* hodoscope = new B5HodoscopeSD(SDname);
+      SDman->AddNewDetector(hodoscope);
+      (fPaddlesLogical.at(i))->SetSensitiveDetector(hodoscope);
+
+    }
+
+
+    // SDman->AddNewDetector(hodoscope1);
+
+    // G4VSensitiveDetector* hodoscope2 
+    //   = new B5HodoscopeSD(SDname="/hodoscope2");
+    // SDman->AddNewDetector(hodoscope2);
+    // (fPaddlesLogical.at(1))->SetSensitiveDetector(hodoscope2);
+
+    // G4VSensitiveDetector* hodoscope3 
+    //   = new B5HodoscopeSD(SDname="/hodoscope3");
+    // SDman->AddNewDetector(hodoscope3);
+    // (fPaddlesLogical.at(2))->SetSensitiveDetector(hodoscope3);
+    
+    // G4VSensitiveDetector* chamber1 
+    //   = new B5DriftChamberSD(SDname="/chamber1");
+    // SDman->AddNewDetector(chamber1);
+    // fWirePlane1Logical->SetSensitiveDetector(chamber1);
+
+    // G4VSensitiveDetector* chamber2 
+    //   = new B5DriftChamberSD(SDname="/chamber2");
+    // SDman->AddNewDetector(chamber2);
+    // fWirePlane2Logical->SetSensitiveDetector(chamber2);
+    
+    // G4VSensitiveDetector* emCalorimeter 
+    //   = new B5EmCalorimeterSD(SDname="/EMcalorimeter");
+    // SDman->AddNewDetector(emCalorimeter);
+    // fCellLogical->SetSensitiveDetector(emCalorimeter);
+    
+    // G4VSensitiveDetector* hadCalorimeter 
+    //   = new B5HadCalorimeterSD(SDname="/HadCalorimeter");
+    // SDman->AddNewDetector(hadCalorimeter);
+    // fHadCalScintiLogical->SetSensitiveDetector(hadCalorimeter);
+
+    // // magnetic field ----------------------------------------------------------
+    // fMagneticField = new B5MagneticField();
+    // fFieldMgr = new G4FieldManager();
+    // fFieldMgr->SetDetectorField(fMagneticField);
+    // fFieldMgr->CreateChordFinder(fMagneticField);
+    // G4bool forceToAllDaughters = true;
+    // fMagneticLogical->SetFieldManager(fFieldMgr, forceToAllDaughters);
+
+    // Register the field and its manager for deleting
+    // G4AutoDelete::Register(fMagneticField);
+    // G4AutoDelete::Register(fFieldMgr);
+}    
+
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
+
+void B5DetectorConstruction::ConstructMaterials()
+{
+    G4NistManager* nistManager = G4NistManager::Instance();
+
+    // Air 
+    nistManager->FindOrBuildMaterial("G4_AIR");
+  
+    // Argon gas
+    nistManager->FindOrBuildMaterial("G4_Ar");
+    // With a density different from the one defined in NIST
+    // G4double density = 1.782e-03*g/cm3; 
+    // nistManager->BuildMaterialWithNewDensity("B5_Ar","G4_Ar",density);
+    // !! cases segmentation fault
+
+
+    // Scintillator
+    // (PolyVinylToluene, C_9H_10)
+    nistManager->FindOrBuildMaterial("G4_PLASTIC_SC_VINYLTOLUENE");
+    
+    // CsI
+    nistManager->FindOrBuildMaterial("G4_CESIUM_IODIDE");
+    
+    // Lead
+    nistManager->FindOrBuildMaterial("G4_Pb");
+    
+    // Vacuum "Galactic"
+    // nistManager->FindOrBuildMaterial("G4_Galactic");
+
+    // Vacuum "Air with low density"
+    // G4Material* air = G4Material::GetMaterial("G4_AIR");
+    // G4double density = 1.0e-5*air->GetDensity();
+    // nistManager
+    //   ->BuildMaterialWithNewDensity("Air_lowDensity", "G4_AIR", density);
+
+    G4cout << G4endl << "The materials defined are : " << G4endl << G4endl;
+    G4cout << *(G4Material::GetMaterialTable()) << G4endl;
+}
+
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
+
+void B5DetectorConstruction::SetArmAngle(G4double val)
+{
+    if (!fSecondArmPhys)
+    {
+        G4cerr << "Detector has not yet been constructed." << G4endl;
+        return;
+    }
+    
+    fArmAngle = val;
+    *fArmRotation = G4RotationMatrix();  // make it unit vector
+    fArmRotation->rotateY(fArmAngle);
+    G4double x = -5.*m * std::sin(fArmAngle);
+    G4double z = 5.*m * std::cos(fArmAngle);
+    fSecondArmPhys->SetTranslation(G4ThreeVector(x,0.,z));
+    
+    // tell G4RunManager that we change the geometry
+    G4RunManager::GetRunManager()->GeometryHasBeenModified();
+}
+
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
+void B5DetectorConstruction::SetSizeX(G4double val)
+{
+
+  if(!fPaddlesPhysical.at(0))
+    {
+        G4cerr << "Detector1 has not yet been constructed." << G4endl;
+        return;
+    }
+  
+  fsizex = val;
+  for(int i=0;i<(int) fPaddlesPhysical.size();i++){
+    G4Box* box = (G4Box*) (((fPaddlesPhysical.at(0))->GetLogicalVolume())->GetSolid());
+    box->SetXHalfLength(fsizex*0.5);
+  }
+
+    // tell G4RunManager that we change the geometry
+    G4RunManager::GetRunManager()->GeometryHasBeenModified();
+}
+
+
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
+void B5DetectorConstruction::SetN(G4int val)
+{
+
+  // Need to catch errors to do with the size of the different vectors of positions, etc... 
+
+
+  if(!fPaddlesPhysical.at(0))
+    {
+        G4cerr << "Detector1 has not yet been constructed." << G4endl;
+        return;
+    }
+
+  
+    fN = val;
+
+    // tell G4RunManager that we change the geometry
+    G4RunManager::GetRunManager()->GeometryHasBeenModified();
+}
+
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
+void B5DetectorConstruction::SetSizeY(G4double val)
+{
+
+  if(!fPaddlesPhysical.at(0))
+    {
+        G4cerr << "Detector1 has not yet been constructed." << G4endl;
+        return;
+    }
+  
+  fsizey = val;
+  for(int i=0;i<(int) fPaddlesPhysical.size();i++){
+    G4Box* box = (G4Box*) (((fPaddlesPhysical.at(0))->GetLogicalVolume())->GetSolid());
+    box->SetYHalfLength(fsizey*0.5);
+  }
+
+    // tell G4RunManager that we change the geometry
+    G4RunManager::GetRunManager()->GeometryHasBeenModified();
+}
+
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
+void B5DetectorConstruction::SetSizeZ(G4double val)
+{
+
+  if(!fPaddlesPhysical.at(0))
+    {
+        G4cerr << "Detector1 has not yet been constructed." << G4endl;
+        return;
+    }
+  
+  fsizez = val;
+  for(int i=0;i<(int) fPaddlesPhysical.size();i++){
+    G4Box* box = (G4Box*) (((fPaddlesPhysical.at(0))->GetLogicalVolume())->GetSolid());
+    box->SetZHalfLength(fsizez*0.5);
+  }
+
+    // tell G4RunManager that we change the geometry
+    G4RunManager::GetRunManager()->GeometryHasBeenModified();
+}
+
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
+void B5DetectorConstruction::SetPbHeight(G4double val)
+{
+
+  if(!fPaddlesPhysical.at(0))
+    {
+        G4cerr << "Detector1 has not yet been constructed." << G4endl;
+        return;
+    }
+  
+  fPbHeight = val;
+
+  // Update the pb bricks height layer
+  G4Box* box = (G4Box*) fPbLogical->GetSolid();
+  box->SetZHalfLength(fPbHeight*0.5);
+
+    // tell G4RunManager that we change the geometry
+    G4RunManager::GetRunManager()->GeometryHasBeenModified();
+}
+
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
+void B5DetectorConstruction::SetPbZ(G4double val)
+{
+
+  if(!fPaddlesPhysical.at(0))
+    {
+        G4cerr << "Detector1 has not yet been constructed." << G4endl;
+        return;
+    }
+  
+  fPbZ = val+fPbHeight*0.5;
+
+  // Update the pb bricks height layer
+
+  G4ThreeVector pb_centre(fPositions.at(1).x(),fPositions.at(1).y(),fPbZ);
+  fPbPhysical->SetTranslation(pb_centre);
+
+
+
+
+  // G4Box* box = (G4Box*) fPbLogical->GetSolid();
+  // box->SetZHalfLength(fPbHeight*0.5);
+
+    // tell G4RunManager that we change the geometry
+    G4RunManager::GetRunManager()->GeometryHasBeenModified();
+}
+
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
+void B5DetectorConstruction::SetLowerDetZ(G4double val)
+{
+  SetDetZ(val+fsizez*0.5,2);
+}
+
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
+void B5DetectorConstruction::SetEfficiency(G4double val)
+{
+  fEfficiency=val;
+
+    // tell G4RunManager that we change the geometry
+    G4RunManager::GetRunManager()->GeometryHasBeenModified();
+}
+
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
+void B5DetectorConstruction::SetMiddleDetZ(G4double val)
+{
+  SetDetZ(val+fsizez*0.5,1);
+}
+
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
+void B5DetectorConstruction::SetUpperDetZ(G4double val)
+{
+  SetDetZ(val+fsizez*0.5,0);
+}
+
+
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
+void B5DetectorConstruction::SetDetZ(G4double val, int det_choice)
+{
+
+  if(!fPaddlesPhysical.at(0))
+    {
+        G4cerr << "Detector1 has not yet been constructed." << G4endl;
+        return;
+    }
+  
+  fDetZ = val;
+
+  // Update the pb bricks height layer
+  if(det_choice==0) G4cout << " Upper Detector : "; 
+  if(det_choice==1) G4cout << " Middle Detector : "; 
+  if(det_choice==2) G4cout << " Lower Detector : "; 
+
+  G4cout << "Changing the vertical position to Z = " << val << G4endl;
+  G4cout << "Note : Please check for overlapping geometries " << G4endl;
+
+  G4ThreeVector det_centre(0.0,0.0,fDetZ);
+  fPositions[det_choice]=det_centre;
+  (fPaddlesPhysical.at(det_choice))->SetTranslation(det_centre);
+
+    // tell G4RunManager that we change the geometry
+    G4RunManager::GetRunManager()->GeometryHasBeenModified();
+}
+
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
+
+void B5DetectorConstruction::DefineCommands()
+{
+    // Define /B5/detector command directory using generic messenger class
+    fMessenger = new G4GenericMessenger(this, 
+                                        "/B5/detector/", 
+                                        "Detector control");
+
+    // armAngle command
+    G4GenericMessenger::Command& armAngleCmd
+      = fMessenger->DeclareMethodWithUnit("armAngle","deg",
+                                  &B5DetectorConstruction::SetArmAngle, 
+                                  "Set rotation angle of the second arm.");
+    armAngleCmd.SetParameterName("angle", true);
+    armAngleCmd.SetRange("angle>=0. && angle<180.");
+    armAngleCmd.SetDefaultValue("0.");
+
+    // detector commands
+    G4GenericMessenger::Command& sizexCmd
+      = fMessenger->DeclareMethodWithUnit("sizex","cm",
+                                  &B5DetectorConstruction::SetSizeX, 
+                                  "Sets the length of the detectors in x");
+    sizexCmd.SetParameterName("sizex",true);
+    sizexCmd.SetDefaultValue("85.");
+
+    G4GenericMessenger::Command& sizeyCmd
+      = fMessenger->DeclareMethodWithUnit("sizey","cm",
+                                  &B5DetectorConstruction::SetSizeY, 
+                                  "Sets the length of the detectors in y");
+    sizeyCmd.SetParameterName("sizey", true);
+    sizeyCmd.SetDefaultValue("15.");
+
+    G4GenericMessenger::Command& sizezCmd
+      = fMessenger->DeclareMethodWithUnit("sizez","cm",
+                                  &B5DetectorConstruction::SetSizeZ, 
+                                  "Sets the length of the detectors in z");
+    sizezCmd.SetParameterName("sizez", true);
+    sizezCmd.SetDefaultValue("5.");
+
+    G4GenericMessenger::Command& pbCmd
+      = fMessenger->DeclareMethodWithUnit("pb_thickness","cm",
+					  &B5DetectorConstruction::SetPbHeight, 
+                                  "Sets the thickness of the Pb bricks layer");
+    pbCmd.SetParameterName("pb_height", true);
+    pbCmd.SetDefaultValue("10.");
+
+
+    G4GenericMessenger::Command& pbZCmd
+      = fMessenger->DeclareMethodWithUnit("pb_z","cm",
+					  &B5DetectorConstruction::SetPbZ, 
+                                  "Sets the Z-coordinate of the Pb bricks layer");
+    pbZCmd.SetParameterName("pb_z", true);
+    pbZCmd.SetDefaultValue("10.");
+
+    G4GenericMessenger::Command& lowerDetZCmd  = fMessenger->DeclareMethodWithUnit("lower_det_z","cm",
+    					  &B5DetectorConstruction::SetLowerDetZ, 
+                                  "Sets the Z-coordinate height of the middle layer");
+    lowerDetZCmd.SetParameterName("middle_det_z", true);
+    lowerDetZCmd.SetDefaultValue("87.8.");
+
+    G4GenericMessenger::Command& middleDetZCmd  = fMessenger->DeclareMethodWithUnit("middle_det_z","cm",
+    					  &B5DetectorConstruction::SetMiddleDetZ, 
+                                  "Sets the Z-coordinate height of the middle layer");
+    middleDetZCmd.SetParameterName("middle_det_z", true);
+    middleDetZCmd.SetDefaultValue("10.");
+
+    G4GenericMessenger::Command& upperDetZCmd  = fMessenger->DeclareMethodWithUnit("upper_det_z","cm",
+    					  &B5DetectorConstruction::SetUpperDetZ, 
+                                  "Sets the Z-coordinate height of theupperlayer");
+    upperDetZCmd.SetParameterName("upper_det_z", true);
+    upperDetZCmd.SetDefaultValue("5.");
+
+    G4GenericMessenger::Command& effDet  = fMessenger->DeclareMethodWithUnit("efficiency","mm",
+    					  &B5DetectorConstruction::SetEfficiency, 
+                                  "Sets the detectors efficiency");
+    effDet.SetParameterName("efficiency", true);
+    effDet.SetRange("efficiency>=0. && efficiency<=100.");
+    effDet.SetDefaultValue("100.0");
+
+
+
+    // Define /B5/detector command directory using generic messenger class
+    // fPaddleMessenger = new G4GenericMessenger(this, 
+    //                                     "/B5/paddle/", 
+    //                                     "Paddle geometry control");
+
+
+
+    // G4GenericMessenger::Command& nCmd = fPaddleMessenger->DeclareMethod("number",
+    //                               &B5DetectorConstruction::SetN, 
+    //                               "Sets the number of detectors");
+    // nCmd.SetParameterName("N", true);
+    // nCmd.SetDefaultValue("2.");
+
+}
+
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
